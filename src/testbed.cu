@@ -371,6 +371,29 @@ void Testbed::compute_and_save_marching_cubes_mesh(const char* filename, Vector3
 		aabb = (m_testbed_mode == ETestbedMode::Nerf) ? m_render_aabb : m_aabb;
 	}
 	printf("unwrap_it:%d\n",unwrap_it);
+
+	// printf("Saving density grid before flexicube");
+	// GPUMemory<float> density = get_density_on_grid(res3d, aabb);
+	// std::vector<float> cpu_density(density.size());
+	// density.copy_to_host(cpu_density);
+
+	// Save as .npy
+	// {
+	// 	std::string header_str = "{'descr': '<f4', 'fortran_order': False, 'shape': (" + std::to_string(res3d.x()) + ", " + std::to_string(res3d.y()) + ", " + std::to_string(res3d.z()) + "), }";
+	// 	// Pad header to be multiple of 16 bytes (NumPy v1.0 requirement)
+	// 	size_t current_len = header_str.size() + 1; // +1 for newline
+	// 	size_t padding = (16 - (current_len % 16)) % 16;
+	// 	header_str += std::string(padding, ' ') + "\n";
+		
+	// 	uint16_t header_len = (uint16_t)header_str.size();
+	// 	std::ofstream file("density_grid.npy", std::ios::binary);
+	// 	file.write("\x93NUMPY", 6);  // Magic string
+	// 	file.write("\x01\x00", 2);   // Version 1.0
+	// 	file.write((char*)&header_len, 2);  // Header length (little-endian)
+	// 	file.write(header_str.c_str(), header_str.size());  // Header
+	// 	file.write((char*)cpu_density.data(), cpu_density.size() * sizeof(float));  // Data
+	// }
+
 	marching_cubes(res3d, aabb, thresh);
 	if ((m_testbed_mode == ETestbedMode::Nerf)){
 		save_mesh(m_mesh.verts, m_mesh.vert_normals, m_mesh.vert_colors, m_mesh.indices, filename, unwrap_it,
@@ -378,6 +401,130 @@ void Testbed::compute_and_save_marching_cubes_mesh(const char* filename, Vector3
 		 m_nerf.training.dataset.n2w_s, m_nerf.training.dataset.n2w_t, 
 		 m_nerf.training.dataset.from_na);
 	}
+}
+
+void Testbed::compute_and_save_marching_cubes_mesh_CHUNKED(const char* filename, Vector3i total_res, BoundingBox global_aabb, float thresh, bool unwrap_it) {
+    if (global_aabb.is_empty()) {
+        global_aabb = (m_testbed_mode == ETestbedMode::Nerf) ? m_render_aabb : m_aabb;
+    }
+
+    int chunk_size = 127; 
+    
+    Vector3f diag = global_aabb.diag();
+	// Cell-based: divide by total_res
+	Vector3f step_size(  
+		diag.x() / total_res.x(),  
+		diag.y() / total_res.y(),  
+		diag.z() / total_res.z()  
+	);  
+  
+
+
+    Vector3i num_chunks(
+        (total_res.x() + chunk_size - 1) / chunk_size,
+        (total_res.y() + chunk_size - 1) / chunk_size,
+        (total_res.z() + chunk_size - 1) / chunk_size
+    );
+
+    // CPU Accumulators
+    std::vector<Vector3f> all_verts;
+    std::vector<uint32_t> all_indices;
+    std::vector<Vector3f> all_normals;
+    std::vector<Vector3f> all_colors;
+    uint32_t vertex_offset = 0;
+
+    tlog::info() << "Extracting " << total_res.x() << "^3 mesh in " << num_chunks.prod() << " chunks...";
+
+    for (int z = 0; z < num_chunks.z(); ++z) {
+        for (int y = 0; y < num_chunks.y(); ++y) {
+            for (int x = 0; x < num_chunks.x(); ++x) {
+                
+                Vector3i start_voxel(x * chunk_size, y * chunk_size, z * chunk_size);
+                
+                // Overlap by 1 voxels to close the gap
+                Vector3i chunk_res(
+                    std::min(chunk_size + 1, total_res.x() - start_voxel.x()),
+                    std::min(chunk_size + 1, total_res.y() - start_voxel.y()),
+                    std::min(chunk_size + 1, total_res.z() - start_voxel.z())
+                );
+
+                if (chunk_res.x() < 2 || chunk_res.y() < 2 || chunk_res.z() < 2) continue;
+
+                BoundingBox chunk_aabb;
+				chunk_aabb.min = global_aabb.min + start_voxel.cast<float>().cwiseProduct(step_size);  
+				chunk_aabb.max = chunk_aabb.min + chunk_res.cast<float>().cwiseProduct(step_size);
+                marching_cubes(chunk_res, chunk_aabb, thresh);
+
+                if (m_mesh.verts.size() > 0) {
+                    size_t n_v = m_mesh.verts.size();
+                    size_t n_i = m_mesh.indices.size();
+
+                    std::vector<Vector3f> local_v(n_v);
+                    std::vector<uint32_t> local_i(n_i);
+                    std::vector<Vector3f> local_n(n_v);
+                    std::vector<Vector3f> local_c(n_v);
+
+                    m_mesh.verts.copy_to_host(local_v.data());
+                    m_mesh.indices.copy_to_host(local_i.data());
+                    m_mesh.vert_normals.copy_to_host(local_n.data());
+                    m_mesh.vert_colors.copy_to_host(local_c.data());
+
+                    for (auto idx : local_i) all_indices.push_back(idx + vertex_offset);
+                    all_verts.insert(all_verts.end(), local_v.begin(), local_v.end());
+                    all_normals.insert(all_normals.end(), local_n.begin(), local_n.end());
+                    all_colors.insert(all_colors.end(), local_c.begin(), local_c.end());
+
+                    vertex_offset += (uint32_t)n_v;
+                }
+                m_mesh.clear();
+            }
+        }
+    }
+
+
+    tlog::info() << "Welding vertices to close seams...";
+    std::vector<Vector3f> welded_verts;
+    std::vector<Vector3f> welded_normals;
+    std::vector<Vector3f> welded_colors;
+    std::vector<uint32_t> welded_indices;
+ 
+    std::unordered_map<std::string, uint32_t> vert_to_id;
+
+    for (size_t i = 0; i < all_verts.size(); ++i) {
+
+        char key[128];
+        sprintf(key, "%.6f_%.6f_%.6f", all_verts[i].x(), all_verts[i].y(), all_verts[i].z());
+        
+        if (vert_to_id.find(key) == vert_to_id.end()) {
+            vert_to_id[key] = (uint32_t)welded_verts.size();
+            welded_verts.push_back(all_verts[i]);
+            welded_normals.push_back(all_normals[i]);
+            welded_colors.push_back(all_colors[i]);
+        }
+    }
+
+    for (auto old_idx : all_indices) {
+        char key[128];
+        Vector3f v = all_verts[old_idx];
+        sprintf(key, "%.6f_%.6f_%.6f", v.x(), v.y(), v.z());
+        welded_indices.push_back(vert_to_id[key]);
+    }
+
+    if (!welded_verts.empty()) {
+        m_mesh.verts.resize(welded_verts.size());
+        m_mesh.verts.copy_from_host(welded_verts);
+        m_mesh.indices.resize(welded_indices.size());
+        m_mesh.indices.copy_from_host(welded_indices);
+        m_mesh.vert_normals.resize(welded_normals.size());
+        m_mesh.vert_normals.copy_from_host(welded_normals);
+        m_mesh.vert_colors.resize(welded_colors.size());
+        m_mesh.vert_colors.copy_from_host(welded_colors);
+
+        save_mesh(m_mesh.verts, m_mesh.vert_normals, m_mesh.vert_colors, m_mesh.indices, filename, unwrap_it,
+            m_nerf.training.dataset.scale, m_nerf.training.dataset.offset,
+            m_nerf.training.dataset.n2w_s, m_nerf.training.dataset.n2w_t, 
+            m_nerf.training.dataset.from_na);
+    }
 }
 
 void Testbed::free_unnecessary_gpu_memory() {
@@ -1904,7 +2051,8 @@ bool Testbed::frame() {
 			}
 
 			printf("%s\n",obj_name);
-			compute_and_save_marching_cubes_mesh(obj_name,m_res,{},0.0f,false);
+			// compute_and_save_marching_cubes_mesh(obj_name,m_res,{},0.0f,false);
+			compute_and_save_marching_cubes_mesh_CHUNKED(obj_name,m_res,{},0.0f,false);
 		}
 	}
 	

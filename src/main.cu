@@ -406,7 +406,7 @@ int main(int argc, char** argv) {
             testbed.free_unnecessary_gpu_memory();
             std::this_thread::sleep_for(std::chrono::seconds(10));
         }
-        testbed.compute_and_save_marching_cubes_mesh(obj_filename_buf,resMesh,{},0.0f,false);
+        testbed.compute_and_save_marching_cubes_mesh_CHUNKED(obj_filename_buf,resMesh,{},0.0f,false);
     }
 
     std::string snpashot_filename = folder_name +"/snapshot_"+to_string(testbed.get_max_iter())+".msgpack";
