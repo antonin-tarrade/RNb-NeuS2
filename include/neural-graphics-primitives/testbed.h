@@ -367,11 +367,15 @@ public:
 	size_t n_encoding_params();
 
 #ifdef NGP_PYTHON
-	pybind11::dict compute_marching_cubes_mesh(Eigen::Vector3i res3d = Eigen::Vector3i::Constant(128), BoundingBox aabb = BoundingBox{Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones()}, float thresh=2.5f);
+	pybind11::dict compute_marching_cubes_mesh(int resx, int resy, int resz, BoundingBox aabb = BoundingBox{Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones()}, float thresh=2.5f);
+	pybind11::dict compute_marching_cubes_mesh_chunked(int resx, int resy, int resz, BoundingBox global_aabb, float thresh);
 	pybind11::array_t<float> render_to_cpu(int width, int height, int spp, bool linear, float start_t, float end_t, float fps, float shutter_fraction);
 	pybind11::array_t<float> my_render_to_cpu(int width, int height, int spp, bool linear, float start_t, float end_t, float fps, float shutter_fraction);
 	pybind11::array_t<float> render_with_rolling_shutter_to_cpu(const Eigen::Matrix<float, 3, 4>& camera_transform_start, const Eigen::Matrix<float, 3, 4>& camera_transform_end, const Eigen::Vector4f& rolling_shutter, int width, int height, int spp, bool linear);
 	pybind11::array_t<float> screenshot(bool linear) const;
+	pybind11::array_t<float> get_density_on_grid_numpy(int resx, int resy, int resz, BoundingBox aabb);
+	__host__ pybind11::dict query_vertex_colors_and_normals(pybind11::array_t<float> vertices);
+	pybind11::array_t<float> apply_mesh_transform(pybind11::array_t<float> vertices);
 	void override_sdf_training_data(pybind11::array_t<float> points, pybind11::array_t<float> distances);
 #endif
 
@@ -412,6 +416,7 @@ public:
 
 	void compute_and_save_marching_cubes_mesh(const char* filename, Eigen::Vector3i res3d = Eigen::Vector3i::Constant(128), BoundingBox aabb = {}, float thresh = 2.5f, bool unwrap_it = false);
 	void compute_and_save_marching_cubes_mesh_CHUNKED(const char* filename, Eigen::Vector3i total_res, BoundingBox global_aabb, float thresh, bool unwrap_it);
+	void export_network(const std::string& output_dir);
 	Eigen::Vector3i compute_and_save_png_slices(const char* filename, int res, BoundingBox aabb = {}, float thresh = 2.5f, float density_range = 4.f, bool flip_y_and_z_axes = false);
 	void free_unnecessary_gpu_memory();
 	////////////////////////////////////////////////////////////////

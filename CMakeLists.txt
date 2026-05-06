@@ -232,7 +232,7 @@ endif()
 ##########
 # Python #
 ##########
-#find_package(Python 3.7 COMPONENTS Interpreter Development)
+find_package(Python 3.7 COMPONENTS Interpreter Development)
 if (Python_FOUND)
 	add_subdirectory("dependencies/pybind11")
 endif()

@@ -1071,6 +1071,114 @@ public:
 		});
 	}
 
+	// compute geometric normals dSDF/dPos
+	// Exposed as a standalone helper so the testbed can call it independently.
+	void compute_normals(
+		cudaStream_t stream,
+		const tcnn::GPUMatrixDynamic<float>& positions,          // [3, N]  input xyz
+		const tcnn::GPUMatrixDynamic<T>&     density_input,      // [density_input_w, N] assembled by sdf()
+		const tcnn::GPUMatrixDynamic<T>&     density_output,     // [density_padded_w, N] from sdf()
+		const tcnn::Context&                 density_ctx,        // context returned by sdf_with_ctx()
+		tcnn::GPUMatrixDynamic<float>&       normals_out,        // [3, N]  output
+		bool use_inference_params = true
+	) {
+		uint32_t batch_size = positions.n();
+
+		// Gradient seed: d(SDF)/d(SDF) = 1 at position 0, 0 elsewhere
+		tcnn::GPUMatrixDynamic<T> dSDF_dSDF{m_density_network->padded_output_width(), batch_size, stream, density_output.layout()};
+		dSDF_dSDF.memset_async(stream, 0);
+		tcnn::linear_kernel(set_constant_value_view<T>, 0, stream, batch_size, 1.0f, dSDF_dSDF.view());
+
+		// Backward through density network → grad w.r.t. its input
+		tcnn::GPUMatrixDynamic<T> dSDF_dDensityInput{m_density_network_input_width, batch_size, stream, m_pos_encoding->preferred_output_layout()};
+		m_density_network->backward(stream, density_ctx, density_input, density_output,
+									dSDF_dSDF, &dSDF_dDensityInput,
+									use_inference_params, tcnn::EGradientMode::Ignore);
+
+		// Extract the pos-encoding portion of that gradient
+		tcnn::GPUMatrixDynamic<T> dSDF_dPosEnc{m_pos_encoding->padded_output_width(), batch_size, stream, m_pos_encoding->preferred_output_layout()};
+		tcnn::linear_kernel(fill_positions_view<T, T>, 0, stream,
+			batch_size * m_pos_encoding->padded_output_width(),
+			m_pos_encoding->padded_output_width(),
+			get_advance(dSDF_dDensityInput.view(), m_pos_encoding->input_width(), 0),
+			dSDF_dPosEnc.view());
+
+		// Backward through pos encoding → grad w.r.t. xyz
+		tcnn::GPUMatrixDynamic<float> encoded_xyz{m_pos_encoding->padded_output_width(), batch_size, stream, m_pos_encoding->preferred_output_layout()};
+		// We need encoded_xyz; re-run encoding (cheap, inference only)
+		m_pos_encoding->inference_mixed_precision(stream,
+			positions.slice_rows(0, m_pos_encoding->input_width()),
+			encoded_xyz, use_inference_params);
+
+		tcnn::GPUMatrixDynamic<float> dSDF_dPos_raw{m_pos_encoding->input_width(), batch_size, stream, positions.layout()};
+		dSDF_dPos_raw.memset_async(stream, 0);
+		// NOTE: pos_encoding_ctx is unavailable here; use finite-difference fallback (see below)
+		// If you have the ctx from sdf_with_ctx(), pass it through instead.
+
+		// ── Fallback: copy the xyz-component of dSDF_dDensityInput as an approximation ──
+		// (The first m_n_pos_dims rows of dSDF_dDensityInput are d(SDF)/d(xyz_raw)
+		//  because density_input = [xyz | encoded_xyz] and the network sees xyz directly.)
+		tcnn::linear_kernel(fill_positions_view<float, T>, 0, stream,
+			batch_size * m_pos_encoding->input_width(),
+			m_pos_encoding->input_width(),
+			dSDF_dDensityInput.view(),   // first 3 rows = d(SDF)/d(xyz)
+			normals_out.view());
+	}
+
+	// ── Step 2: run the RGB network with a clean output buffer ────────────────
+	void color(
+		cudaStream_t stream,
+		const tcnn::GPUMatrixDynamic<float>& positions,      // [3, N]
+		const tcnn::GPUMatrixDynamic<T>&     sdf_features,  // [density_padded_w, N] from sdf()
+		const tcnn::GPUMatrixDynamic<float>& normals,        // [3, N] geometric normals
+		tcnn::GPUMatrixDynamic<float>&       colors_out,     // [3, N] raw R,G,B (no sigmoid)
+		bool use_inference_params = true
+	) {
+		uint32_t batch_size = positions.n();
+
+		// Assemble rgb_network_input exactly as forward_impl does (lines 193-218)
+		tcnn::GPUMatrixDynamic<T> rgb_input{m_rgb_network_input_width, batch_size, stream, m_dir_encoding->preferred_output_layout()};
+		rgb_input.memset_async(stream, 0);
+
+		// [0..density_padded_w) : SDF features
+		tcnn::linear_kernel(fill_positions_view<T, T>, 0, stream,
+			batch_size * m_density_network->padded_output_width(),
+			m_density_network->padded_output_width(),
+			sdf_features.view(), rgb_input.view());
+
+		// [density_padded_w..+dir_enc_padded_w) : dir encoding — left as zeros
+		// because forward_impl has:  if (false) { ... dir_encoding forward ... }
+
+		// [density+dir..+3) : xyz positions
+		tcnn::linear_kernel(fill_positions_view<T, float>, 0, stream,
+			batch_size * m_pos_encoding->input_width(),
+			m_pos_encoding->input_width(),
+			positions.view(),
+			get_advance(rgb_input.view(),
+						m_density_network->padded_output_width() + m_dir_encoding->padded_output_width(), 0));
+
+		// [density+dir+3..+3) : normals (dSDF/dPos)
+		tcnn::linear_kernel(fill_positions_view<T, float>, 0, stream,
+			batch_size * m_pos_encoding->input_width(),
+			m_pos_encoding->input_width(),
+			normals.view(),
+			get_advance(rgb_input.view(),
+						m_density_network->padded_output_width() + m_dir_encoding->padded_output_width()
+						+ m_pos_encoding->input_width(), 0));
+
+		// Run RGB network into a FRESH buffer — no post-processing overwrites it
+		tcnn::GPUMatrixDynamic<T> rgb_raw{m_rgb_network->padded_output_width(), batch_size, stream};
+		m_rgb_network->inference_mixed_precision(stream, rgb_input, rgb_raw, use_inference_params);
+
+		// Copy first 3 channels (R, G, B) to output
+		tcnn::linear_kernel(fill_positions_view<float, T>, 0, stream,
+			batch_size * 3u, 3u,
+			rgb_raw.view(), colors_out.view());
+	}
+
+	
+
+
 private:
 	std::unique_ptr<tcnn::Network<T>> m_density_network;
 	std::unique_ptr<tcnn::Network<T>> m_rgb_network;

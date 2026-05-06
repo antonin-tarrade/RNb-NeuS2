@@ -3022,7 +3022,7 @@ void Testbed::Nerf::Training::update_metadata_albedo(int first, int last) {
 	}
 
 	int n = last - first;
-	if (n <= 0) {
+	if (n <= 0 || dataset.metadata_albedo.empty()) {
 		return;
 	}
 	metadata_albedo_gpu.enlarge(last);

@@ -211,6 +211,14 @@ int main(int argc, char** argv) {
             {"fractional-training"},
     };
 
+    // Add the possibility to export MLP weights
+    Flag export_network_flag{
+        parser,
+        "EXPORT_NETWORK",
+        "Export MLP weights for extraction",
+        {"export-network"},
+    };
+
 
 	// Parse command line arguments and react to parsing
 	// errors using exceptions.
@@ -399,6 +407,10 @@ int main(int argc, char** argv) {
                 }
             }
         }
+    }
+
+    if (export_network_flag){
+        testbed.export_network(folder_name + "/mlp_export");
     }
 
     if (save_mesh_flag){

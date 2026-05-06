@@ -1,0 +1,8 @@
+# ninja log v5
+0	3874	1777557757203501747	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/common.o	96fb544cec6114f5
+1	4372	1777557757699501735	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/common_device.o	be94ae826883bce3
+2	4734	1777557758059501726	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/network.o	f8c41260c7e16cfb
+1	6215	1777557759539501690	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/cpp_api.o	1280218a229b8a27
+2	81587	1777557797531500758	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/encoding.o	c05e5f79d097f5c0
+1	157765	1777557911063497975	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/cutlass_mlp.o	537b1e8ff83cdccc
+2	275147	1777558028419495097	/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/src/fully_fused_mlp.o	9c4951fb684560f2

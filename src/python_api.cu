@@ -61,7 +61,7 @@ void Testbed::Nerf::Training::set_image(int frame_idx, pybind11::array_t<float> 
 
 	py::buffer_info depth_buf = depth_img.request();
 
-	dataset.set_training_image(frame_idx, {img_buf.shape[1], img_buf.shape[0]}, (const void*)img_buf.ptr, (const float*)depth_buf.ptr, depth_scale, false, EImageDataType::Float, EDepthDataType::Float);
+	//dataset.set_training_image(frame_idx, {img_buf.shape[1], img_buf.shape[0]}, (const void*)img_buf.ptr, (const float*)depth_buf.ptr, depth_scale, false, EImageDataType::Float, EDepthDataType::Float);
 }
 
 void Testbed::override_sdf_training_data(py::array_t<float> points, py::array_t<float> distances) {
@@ -96,11 +96,12 @@ void Testbed::override_sdf_training_data(py::array_t<float> points, py::array_t<
 	m_sdf.training.generate_sdf_data_online = false;
 }
 
-pybind11::dict Testbed::compute_marching_cubes_mesh(Eigen::Vector3i res3d, BoundingBox aabb, float thresh) {
+py::dict Testbed::compute_marching_cubes_mesh(int resx, int resy, int resz, BoundingBox aabb, float thresh) {
 	if (aabb.is_empty()) {
 		aabb = m_testbed_mode == ETestbedMode::Nerf ? m_render_aabb : m_aabb;
 	}
 
+	Eigen::Vector3i res3d = {resx, resy, resz};
 	marching_cubes(res3d, aabb, thresh);
 
 	py::array_t<float> cpuverts({(int)m_mesh.verts.size(), 3});
@@ -118,6 +119,133 @@ pybind11::dict Testbed::compute_marching_cubes_mesh(Eigen::Vector3i res3d, Bound
 	}
 
 	return py::dict("V"_a=cpuverts, "N"_a=cpunormals, "C"_a=cpucolors, "F"_a=cpuindices);
+}
+
+py::dict Testbed::compute_marching_cubes_mesh_chunked(int resx, int resy, int resz, BoundingBox global_aabb, float thresh) {
+    if (global_aabb.is_empty()) {
+        global_aabb = (m_testbed_mode == ETestbedMode::Nerf) ? m_render_aabb : m_aabb;
+    }
+
+    Eigen::Vector3i total_res = {resx, resy, resz};
+    const int chunk_size = 127; 
+    
+    Eigen::Vector3f diag = global_aabb.diag();
+    Eigen::Vector3f step_size(  
+        diag.x() / (float)total_res.x(),  
+        diag.y() / (float)total_res.y(),  
+        diag.z() / (float)total_res.z()  
+    );  
+
+    Eigen::Vector3i num_chunks(
+        (total_res.x() + chunk_size - 1) / chunk_size,
+        (total_res.y() + chunk_size - 1) / chunk_size,
+        (total_res.z() + chunk_size - 1) / chunk_size
+    );
+
+    // CPU Accumulators
+    std::vector<Eigen::Vector3f> all_verts;
+    std::vector<uint32_t> all_indices;
+    std::vector<Eigen::Vector3f> all_normals;
+    std::vector<Eigen::Vector3f> all_colors;
+    uint32_t vertex_offset = 0;
+
+    // 1. Chunked Extraction Loop
+    for (int z = 0; z < num_chunks.z(); ++z) {
+        for (int y = 0; y < num_chunks.y(); ++y) {
+            for (int x = 0; x < num_chunks.x(); ++x) {
+                
+                Eigen::Vector3i start_voxel(x * chunk_size, y * chunk_size, z * chunk_size);
+                
+                // Overlap by 1 voxel to ensure watertight seams
+                Eigen::Vector3i chunk_res(
+                    std::min(chunk_size + 1, total_res.x() - start_voxel.x()),
+                    std::min(chunk_size + 1, total_res.y() - start_voxel.y()),
+                    std::min(chunk_size + 1, total_res.z() - start_voxel.z())
+                );
+
+                if (chunk_res.x() < 2 || chunk_res.y() < 2 || chunk_res.z() < 2) continue;
+
+                BoundingBox chunk_aabb;
+                chunk_aabb.min = global_aabb.min + start_voxel.cast<float>().cwiseProduct(step_size);  
+                chunk_aabb.max = chunk_aabb.min + chunk_res.cast<float>().cwiseProduct(step_size);
+                
+                // Internal GPU Marching Cubes call
+                marching_cubes(chunk_res, chunk_aabb, thresh);
+
+                if (m_mesh.verts.size() > 0) {
+                    size_t n_v = m_mesh.verts.size();
+                    size_t n_i = m_mesh.indices.size();
+
+                    std::vector<Eigen::Vector3f> local_v(n_v);
+                    std::vector<uint32_t> local_i(n_i);
+                    std::vector<Eigen::Vector3f> local_n(n_v);
+                    std::vector<Eigen::Vector3f> local_c(n_v);
+
+                    m_mesh.verts.copy_to_host(local_v.data());
+                    m_mesh.indices.copy_to_host(local_i.data());
+                    m_mesh.vert_normals.copy_to_host(local_n.data());
+                    m_mesh.vert_colors.copy_to_host(local_c.data());
+
+                    for (auto idx : local_i) all_indices.push_back(idx + vertex_offset);
+                    all_verts.insert(all_verts.end(), local_v.begin(), local_v.end());
+                    all_normals.insert(all_normals.end(), local_n.begin(), local_n.end());
+                    all_colors.insert(all_colors.end(), local_c.begin(), local_c.end());
+
+                    vertex_offset += (uint32_t)n_v;
+                }
+                m_mesh.clear(); // Clear GPU buffers for the next chunk
+            }
+        }
+    }
+
+    // 2. Vertex Welding (Closing seams)
+    std::vector<Eigen::Vector3f> welded_verts;
+    std::vector<Eigen::Vector3f> welded_normals;
+    std::vector<Eigen::Vector3f> welded_colors;
+    std::vector<uint32_t> welded_indices;
+    std::unordered_map<std::string, uint32_t> vert_to_id;
+
+    for (size_t i = 0; i < all_verts.size(); ++i) {
+        char key[128];
+        // Using high precision for welding keys to avoid unintended collapses
+        sprintf(key, "%.6f_%.6f_%.6f", all_verts[i].x(), all_verts[i].y(), all_verts[i].z());
+        
+        if (vert_to_id.find(key) == vert_to_id.end()) {
+            vert_to_id[key] = (uint32_t)welded_verts.size();
+            welded_verts.push_back(all_verts[i]);
+            welded_normals.push_back(all_normals[i]);
+            welded_colors.push_back(all_colors[i]);
+        }
+    }
+
+    for (auto old_idx : all_indices) {
+        char key[128];
+        Eigen::Vector3f v = all_verts[old_idx];
+        sprintf(key, "%.6f_%.6f_%.6f", v.x(), v.y(), v.z());
+        welded_indices.push_back(vert_to_id[key]);
+    }
+
+    // 3. Prepare Python Output
+    int n_v = (int)welded_verts.size();
+    int n_f = (int)welded_indices.size() / 3;
+
+    py::array_t<float> cpuverts({n_v, 3});
+    py::array_t<float> cpunormals({n_v, 3});
+    py::array_t<float> cpucolors({n_v, 3});
+    py::array_t<int> cpuindices({n_f, 3});
+
+    std::memcpy(cpuverts.request().ptr, welded_verts.data(), n_v * 3 * sizeof(float));
+    std::memcpy(cpunormals.request().ptr, welded_normals.data(), n_v * 3 * sizeof(float));
+    std::memcpy(cpucolors.request().ptr, welded_colors.data(), n_v * 3 * sizeof(float));
+    std::memcpy(cpuindices.request().ptr, welded_indices.data(), n_f * 3 * sizeof(int));
+
+    // Normalize normals on CPU for final result
+    Eigen::Vector3f* ns = (Eigen::Vector3f*)cpunormals.request().ptr;
+    for (int i = 0; i < n_v; ++i) {
+        ns[i].normalize();
+    }
+
+    return py::dict("V"_a=cpuverts, "N"_a=cpunormals, "C"_a=cpucolors, "F"_a=cpuindices);
 }
 
 py::array_t<float> Testbed::render_to_cpu(int width, int height, int spp, bool linear, float start_time, float end_time, float fps, float shutter_fraction) {
@@ -211,6 +339,199 @@ py::array_t<float> Testbed::screenshot(bool linear) const {
 #else
 	throw std::runtime_error{"testbed.screenshot() in only supported when compiling with NGP_GUI."};
 #endif
+}
+
+py::array_t<float> Testbed::get_density_on_grid_numpy(int resx, int resy, int resz, BoundingBox aabb){
+	if (aabb.is_empty()) {
+		// Use member variables directly
+		aabb = m_testbed_mode == ETestbedMode::Nerf ? m_render_aabb : m_aabb;
+	}
+
+	Eigen::Vector3i res3d = {resx, resy, resz};
+	// Call the internal C++ function directly
+	auto density_gpu = get_density_on_grid(res3d, aabb);
+
+	// Prepare the array with the variable resolution
+	py::array_t<float> result({resx, resy, resz});
+	py::buffer_info buf = result.request();
+
+	// Copy from GPU to CPU
+	CUDA_CHECK_THROW(cudaMemcpy(buf.ptr, density_gpu.data(), res3d.prod() * sizeof(float), cudaMemcpyDeviceToHost));
+
+	return result;
+}
+
+// ── Kernels needed by query_vertex_colors_and_normals / apply_mesh_transform ──
+// Defined here rather than testbed_nerf.cu so python_api.cu can see them.
+
+__host__ __device__ inline uint32_t get_num_blocks_api(uint32_t n) {
+    return (n + 128 - 1) / 128;
+}
+
+__global__ void add_eps_axis_kernel(float* p, int axis, float eps, uint32_t n) {
+    uint32_t col = threadIdx.x + blockIdx.x * blockDim.x;
+    if (col >= n) return;
+    p[axis + col * 3] += eps;
+}
+
+__global__ void subtract_eps_axis_kernel(float* p, int axis, float eps, uint32_t n) {
+    uint32_t col = threadIdx.x + blockIdx.x * blockDim.x;
+    if (col >= n) return;
+    p[axis + col * 3] -= eps;
+}
+
+__global__ void compute_fd_gradient_kernel(
+    float* nrm, const precision_t* sdf_p, const precision_t* sdf_m,
+    int axis, float eps, uint32_t dpw, uint32_t n)
+{
+    uint32_t col = threadIdx.x + blockIdx.x * blockDim.x;
+    if (col >= n) return;
+    float grad = -((float)sdf_p[col * dpw] - (float)sdf_m[col * dpw]) / (2.f * eps); //Negative because we work with SDF but want normals pointing outwards
+    nrm[axis + col * 3] = grad;
+}
+
+__global__ void normalize_normals_api_kernel(float* nrm, uint32_t n) {
+    uint32_t col = threadIdx.x + blockIdx.x * blockDim.x;
+    if (col >= n) return;
+    float nx = nrm[0 + col * 3], ny = nrm[1 + col * 3], nz = nrm[2 + col * 3];
+    float len = sqrtf(nx*nx + ny*ny + nz*nz) + 1e-9f;
+    nrm[0 + col * 3] = nx / len;
+    nrm[1 + col * 3] = ny / len;
+    nrm[2 + col * 3] = nz / len;
+}
+
+// Converts row-major world-space [N,3] → column-major warped [3,N]
+// Applies accumulated rotation R⁻¹*(v-t) then warp_position=(v-aabb.min)/aabb.diag
+__global__ void warp_and_rotate_kernel(
+    uint32_t n,
+    const float* __restrict__ world_rm,   // [N,3] row-major input
+    float*       __restrict__ warped_cm,  // [3,N] column-major output
+    float aabb_min_x, float aabb_min_y, float aabb_min_z,
+    float aabb_diag_x, float aabb_diag_y, float aabb_diag_z,
+    const precision_t* __restrict__ rot6d,   // 9 floats, row-major 3x3
+    const precision_t* __restrict__ trans    // 3 floats
+) {
+    uint32_t col = threadIdx.x + blockIdx.x * blockDim.x;
+    if (col >= n) return;
+
+    float vx = world_rm[col * 3 + 0] - (float)trans[0];
+    float vy = world_rm[col * 3 + 1] - (float)trans[1];
+    float vz = world_rm[col * 3 + 2] - (float)trans[2];
+
+    // R stored row-major: R[row][col] = rot6d[row*3 + col]
+    // R^{-1} of an orthogonal matrix = R^T
+    float rx = (float)rot6d[0]*vx + (float)rot6d[3]*vy + (float)rot6d[6]*vz;
+    float ry = (float)rot6d[1]*vx + (float)rot6d[4]*vy + (float)rot6d[7]*vz;
+    float rz = (float)rot6d[2]*vx + (float)rot6d[5]*vy + (float)rot6d[8]*vz;
+
+    // warp_position = (pos - aabb.min) / aabb.diag — write in CM layout
+    warped_cm[0 + col * 3] = (rx - aabb_min_x) / aabb_diag_x;
+    warped_cm[1 + col * 3] = (ry - aabb_min_y) / aabb_diag_y;
+    warped_cm[2 + col * 3] = (rz - aabb_min_z) / aabb_diag_z;
+}
+
+
+__host__ py::dict Testbed::query_vertex_colors_and_normals(py::array_t<float> vertices) {
+    py::buffer_info v_buf = vertices.request();
+    uint32_t n_vertices = (uint32_t)v_buf.shape[0];
+
+    py::array_t<float> colors({(int)n_vertices, 3});
+    py::array_t<float> normals({(int)n_vertices, 3});
+    float* colors_ptr  = (float*)colors.request().ptr;
+    float* normals_ptr = (float*)normals.request().ptr;
+
+    cudaStream_t stream = m_inference_stream;
+    const uint32_t batch_size = 1 << 16;
+
+    const float aabb_min_x  = m_aabb.min.x(),  aabb_min_y  = m_aabb.min.y(),  aabb_min_z  = m_aabb.min.z();
+    const float aabb_diag_x = m_aabb.diag().x(), aabb_diag_y = m_aabb.diag().y(), aabb_diag_z = m_aabb.diag().z();
+
+    for (uint32_t offset = 0; offset < n_vertices; offset += batch_size) {
+        uint32_t count        = std::min(n_vertices - offset, batch_size);
+        uint32_t padded_count = next_multiple(count, 128u);
+
+        // Upload row-major world-space positions from Python numpy
+        tcnn::GPUMemory<float> world_pos_rm(padded_count * 3);
+        CUDA_CHECK_THROW(cudaMemsetAsync(world_pos_rm.data(), 0,
+            padded_count * 3 * sizeof(float), stream));
+        CUDA_CHECK_THROW(cudaMemcpyAsync(
+            world_pos_rm.data(),
+            (float*)v_buf.ptr + offset * 3,
+            count * 3 * sizeof(float),
+            cudaMemcpyHostToDevice, stream));
+
+        // Rotate + warp → CM [3, padded_count] ready for network
+        tcnn::GPUMatrixDynamic<float> warped_gpu(3, padded_count, stream, tcnn::CM);
+        CUDA_CHECK_THROW(cudaMemsetAsync(warped_gpu.data(), 0,
+            3 * padded_count * sizeof(float), stream));
+
+        warp_and_rotate_kernel<<<get_num_blocks_api(padded_count), 128, 0, stream>>>(
+            padded_count, world_pos_rm.data(), warped_gpu.data(),
+            aabb_min_x, aabb_min_y, aabb_min_z,
+            aabb_diag_x, aabb_diag_y, aabb_diag_z,
+            m_nerf_network->rotation()->params(),
+            m_nerf_network->transition()->params());
+
+        // SDF features
+        uint32_t dpw = m_nerf_network->padded_density_output_width();
+        tcnn::GPUMatrixDynamic<precision_t> sdf_features(dpw, padded_count, stream, tcnn::CM);
+        CUDA_CHECK_THROW(cudaMemsetAsync(sdf_features.data(), 0,
+            dpw * padded_count * sizeof(precision_t), stream));
+        m_nerf_network->sdf(stream, warped_gpu, sdf_features, true);
+
+        // Normals via finite differences in warped space
+        float eps = 1e-3f;
+        tcnn::GPUMatrixDynamic<float> normals_gpu(3, padded_count, stream, tcnn::CM);
+        CUDA_CHECK_THROW(cudaMemsetAsync(normals_gpu.data(), 0,
+            3 * padded_count * sizeof(float), stream));
+
+        for (int axis = 0; axis < 3; ++axis) {
+            tcnn::GPUMatrixDynamic<float> pos_plus(3, padded_count, stream, tcnn::CM);
+            CUDA_CHECK_THROW(cudaMemcpyAsync(pos_plus.data(), warped_gpu.data(),
+                3 * padded_count * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            add_eps_axis_kernel<<<get_num_blocks_api(padded_count), 128, 0, stream>>>(
+                pos_plus.data(), axis, eps, padded_count);
+            tcnn::GPUMatrixDynamic<precision_t> sdf_p(dpw, padded_count, stream, tcnn::CM);
+            m_nerf_network->sdf(stream, pos_plus, sdf_p, true);
+
+            tcnn::GPUMatrixDynamic<float> pos_minus(3, padded_count, stream, tcnn::CM);
+            CUDA_CHECK_THROW(cudaMemcpyAsync(pos_minus.data(), warped_gpu.data(),
+                3 * padded_count * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            subtract_eps_axis_kernel<<<get_num_blocks_api(padded_count), 128, 0, stream>>>(
+                pos_minus.data(), axis, eps, padded_count);
+            tcnn::GPUMatrixDynamic<precision_t> sdf_m(dpw, padded_count, stream, tcnn::CM);
+            m_nerf_network->sdf(stream, pos_minus, sdf_m, true);
+
+            compute_fd_gradient_kernel<<<get_num_blocks_api(padded_count), 128, 0, stream>>>(
+                normals_gpu.data(), sdf_p.data(), sdf_m.data(), axis, eps, dpw, padded_count);
+        }
+        normalize_normals_api_kernel<<<get_num_blocks_api(padded_count), 128, 0, stream>>>(
+            normals_gpu.data(), padded_count);
+
+        // RGB network
+        tcnn::GPUMatrixDynamic<float> colors_gpu(3, padded_count, stream, tcnn::CM);
+        m_nerf_network->color(stream, warped_gpu, sdf_features, normals_gpu, colors_gpu, true);
+
+        CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
+
+        std::vector<float> h_colors(padded_count * 3);
+        std::vector<float> h_normals(padded_count * 3);
+        CUDA_CHECK_THROW(cudaMemcpy(h_colors.data(),  colors_gpu.data(),
+            padded_count * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+        CUDA_CHECK_THROW(cudaMemcpy(h_normals.data(), normals_gpu.data(),
+            padded_count * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+
+        auto sigmoid = [](float x) { return 1.f / (1.f + expf(-x)); };
+        for (uint32_t i = 0; i < count; ++i) {
+            colors_ptr[(offset + i) * 3 + 0] = sigmoid(h_colors[0 + i * 3]);
+            colors_ptr[(offset + i) * 3 + 1] = sigmoid(h_colors[1 + i * 3]);
+            colors_ptr[(offset + i) * 3 + 2] = sigmoid(h_colors[2 + i * 3]);
+            normals_ptr[(offset + i) * 3 + 0] = h_normals[0 + i * 3];
+            normals_ptr[(offset + i) * 3 + 1] = h_normals[1 + i * 3];
+            normals_ptr[(offset + i) * 3 + 2] = h_normals[2 + i * 3];
+        }
+    }
+    return py::dict("colors"_a=colors, "normals"_a=normals);
 }
 
 PYBIND11_MODULE(pyngp, m) {
@@ -391,7 +712,9 @@ PYBIND11_MODULE(pyngp, m) {
 			"If the aabb parameter specifies an inside-out (\"empty\") box (default), the current render_aabb bounding box is used."
 		)
 		.def("compute_marching_cubes_mesh", &Testbed::compute_marching_cubes_mesh,
-			py::arg("resolution") = Eigen::Vector3i::Constant(256),
+			py::arg("resx") = 256,
+			py::arg("resy") = 256,
+			py::arg("resz") = 256,
 			py::arg("aabb") = BoundingBox{},
 			py::arg("thresh") = std::numeric_limits<float>::max(),
 			"Compute a marching cubes mesh from the current SDF or NeRF model. "
@@ -399,7 +722,29 @@ PYBIND11_MODULE(pyngp, m) {
 			"`thresh` is the density threshold; use 0 for SDF; 2.5 works well for NeRF. "
 			"If the aabb parameter specifies an inside-out (\"empty\") box (default), the current render_aabb bounding box is used."
 		)
-		;
+		.def("compute_marching_cubes_mesh_chunked", &Testbed::compute_marching_cubes_mesh_chunked,
+			py::arg("resx") = 256,
+			py::arg("resy") = 256,
+			py::arg("resz") = 256,
+			py::arg("aabb") = BoundingBox{},
+			py::arg("thresh") = std::numeric_limits<float>::max(),
+			"Compute a marching cubes mesh from the current SDF or NeRF model, using a memory-efficient chunked approach. "
+			"Returns a python dict with numpy arrays V (vertices), N (vertex normals), C (vertex colors), and F (triangular faces). "
+			"`thresh` is the density threshold; use 0 for SDF; 2.5 works well for NeRF. "
+		)
+		.def("get_density_grid", &Testbed::get_density_on_grid_numpy, 
+			py::arg("resx") = 256,
+			py::arg("resy") = 256,
+			py::arg("resz") = 256,
+			py::arg("aabb") = BoundingBox{},
+			"Queries the MLP for density values at a variable resolution and returns a 3D numpy array."
+		)
+		.def("query_vertex_colors_and_normals", &Testbed::query_vertex_colors_and_normals, 
+			py::arg("vertices"),
+			"Queries the MLP for RGB values at the given vertex positions. Returns a Nx3 numpy array of colors."
+		);
+		
+
 
 	// Interesting members.
 	testbed
@@ -516,7 +861,8 @@ PYBIND11_MODULE(pyngp, m) {
 
 	py::class_<NerfDataset> nerfdataset(m, "NerfDataset");
 	nerfdataset
-		.def_readonly("metadata", &NerfDataset::metadata)
+		//.def_readonly("metadata", &NerfDataset::metadata)
+		.def_property_readonly("metadata", [](py::object& self) { return py::dict(); })
 		.def_readonly("transforms", &NerfDataset::xforms)
 		.def_readonly("render_aabb", &NerfDataset::render_aabb)
 		.def_readonly("up", &NerfDataset::up)

@@ -127,6 +127,81 @@ void Testbed::clear_training_data() {
 	m_nerf.training.dataset.metadata_albedo.clear();
 }
 
+
+void Testbed::export_network(const std::string& output_dir) {
+
+    fs::path dir(output_dir);
+    if (!dir.exists()) fs::create_directory(dir);
+
+    size_t n_total = m_network->n_params();
+
+    std::vector<float> params(n_total);
+    CUDA_CHECK_THROW(cudaMemcpy(
+        params.data(),
+        m_trainer->params_full_precision(),
+        n_total * sizeof(float),
+        cudaMemcpyDeviceToHost
+    ));
+
+    {
+        std::ofstream f(output_dir + "/params.bin", std::ios::binary);
+        f.write((const char*)params.data(), n_total * sizeof(float));
+    }
+
+    auto layer_sizes = m_network->layer_sizes();
+    size_t n_mlp_params = 0;
+    for (auto& [rows, cols] : layer_sizes) n_mlp_params += rows * cols;
+
+    json meta;
+
+    meta["encoding"]              = m_network_config["encoding"];
+	meta["encoding"]["per_level_scale"] = m_per_level_scale;
+	meta["encoding"]["base_resolution"]  = m_base_grid_resolution;
+    meta["density_network"]       = m_network_config["network"];
+    meta["n_total_params"]        = n_total;
+    meta["n_mlp_params"]          = n_mlp_params;
+    meta["n_encoding_params"]     = n_total - n_mlp_params;
+    meta["params_file"]           = "params.bin";
+    meta["params_dtype"]          = "float32";
+
+    json layers = json::array();
+    size_t offset = 0;
+    for (auto& [rows, cols] : layer_sizes) {
+        layers.push_back({{"rows", rows}, {"cols", cols}, {"offset", offset}});
+        offset += rows * cols;
+    }
+    meta["mlp_layers"] = layers;
+
+    meta["aabb"] = {
+        {"min", {m_render_aabb.min.x(), m_render_aabb.min.y(), m_render_aabb.min.z()}},
+        {"max", {m_render_aabb.max.x(), m_render_aabb.max.y(), m_render_aabb.max.z()}}
+    };
+
+    meta["scene"] = {
+        {"nerf_scale",  m_nerf.training.dataset.scale},
+        {"nerf_offset", {
+            m_nerf.training.dataset.offset.x(),
+            m_nerf.training.dataset.offset.y(),
+            m_nerf.training.dataset.offset.z()
+        }},
+        {"n2w_s",       m_nerf.training.dataset.n2w_s},
+        {"n2w_t",       {
+            m_nerf.training.dataset.n2w_t.x(),
+            m_nerf.training.dataset.n2w_t.y(),
+            m_nerf.training.dataset.n2w_t.z()
+        }}
+    };
+
+    meta["thresh"] = m_mesh.thresh;
+
+    std::ofstream mf(output_dir + "/meta.json");
+    mf << meta.dump(2);
+
+    tlog::success() << "Exported network to " << output_dir;
+    tlog::info()    << "  params : " << n_total << " floats ("
+                    << (n_total * 4 / 1024 / 1024) << " MB)";
+}
+
 json Testbed::load_network_config(const fs::path& network_config_path) {
 	if (!network_config_path.empty()) {
 		m_network_config_path = network_config_path;
@@ -411,7 +486,6 @@ void Testbed::compute_and_save_marching_cubes_mesh_CHUNKED(const char* filename,
     int chunk_size = 127; 
     
     Vector3f diag = global_aabb.diag();
-	// Cell-based: divide by total_res
 	Vector3f step_size(  
 		diag.x() / total_res.x(),  
 		diag.y() / total_res.y(),  

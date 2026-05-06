@@ -1,0 +1,44 @@
+ninja_required_version = 1.3
+cxx = c++
+nvcc = /usr/local/cuda-12.6/bin/nvcc
+
+cflags = -pthread -B /home/atarrade/dev/anaconda3/envs/rnb2/compiler_compat -Wno-unused-result -Wsign-compare -DNDEBUG -fwrapv -O2 -Wall -fPIC -O2 -isystem /home/atarrade/dev/anaconda3/envs/rnb2/include -fPIC -O2 -isystem /home/atarrade/dev/anaconda3/envs/rnb2/include -fPIC -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/include -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/dependencies -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/dependencies/cutlass/include -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/dependencies/cutlass/tools/util/include -I/home/atarrade/dev/anaconda3/envs/rnb2/lib/python3.10/site-packages/torch/include -I/home/atarrade/dev/anaconda3/envs/rnb2/lib/python3.10/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.6/include -I/home/atarrade/dev/anaconda3/envs/rnb2/include/python3.10 -c
+post_cflags = -std=c++14 -DTCNN_MIN_GPU_ARCH=75 -DTORCH_API_INCLUDE_EXTENSION_H -DTORCH_EXTENSION_NAME=_C
+cuda_cflags = -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/include -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/dependencies -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/dependencies/cutlass/include -I/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/dependencies/cutlass/tools/util/include -I/home/atarrade/dev/anaconda3/envs/rnb2/lib/python3.10/site-packages/torch/include -I/home/atarrade/dev/anaconda3/envs/rnb2/lib/python3.10/site-packages/torch/include/torch/csrc/api/include -I/usr/local/cuda-12.6/include -I/home/atarrade/dev/anaconda3/envs/rnb2/include/python3.10 -c
+cuda_post_cflags = -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -std=c++14 --extended-lambda --expt-relaxed-constexpr -U__CUDA_NO_HALF_OPERATORS__ -U__CUDA_NO_HALF_CONVERSIONS__ -U__CUDA_NO_HALF2_OPERATORS__ -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_75,code=sm_75 -Xcompiler=-mf16c -Xcompiler=-Wno-float-conversion -Xcompiler=-fno-strict-aliasing -DTCNN_MIN_GPU_ARCH=75 -DTORCH_API_INCLUDE_EXTENSION_H -DTORCH_EXTENSION_NAME=_C
+cuda_dlink_post_cflags = 
+sycl_dlink_post_cflags = 
+ldflags = 
+
+rule compile
+  command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags
+  depfile = $out.d
+  deps = gcc
+
+rule cuda_compile
+  depfile = $out.d
+  deps = gcc
+  command = $nvcc -MD -MF $out.d $cuda_cflags -c $in -o $out $cuda_post_cflags
+
+
+
+
+
+
+
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/common.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/common.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/common_device.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/common_device.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/cpp_api.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/cpp_api.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/cutlass_mlp.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/cutlass_mlp.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/encoding.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/encoding.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/fully_fused_mlp.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/fully_fused_mlp.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/../../src/network.o: cuda_compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/src/network.cu
+build /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/build/temp.linux-x86_64-3.10/tinycudann/bindings.o: compile /home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/dependencies/neus2_tcnn/bindings/torch/tinycudann/bindings.cpp
+
+
+
+
+
+
+
+
