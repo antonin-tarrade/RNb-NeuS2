@@ -79,9 +79,25 @@ def extract_mesh(snapshot_path, resolution=256, threshold=0.0, output_path="extr
         v_new[:, 1] = v_old[:, 1]
         v_new[:, 2] = v_old[:, 0]
 
+        #Print some vertices to see format
+        print("Sample vertices (grid index space):")
+        print(v_new[:5])  # Print first 5 vertices  
+        print("Vertex position range (grid index space):")
+        print("Min:", np.min(v_new, axis=0))
+        print("Max:", np.max(v_new, axis=0))
+        
+
         # Map from grid index space → world space
         res_scale = (aabb.max - aabb.min) / resolution 
         world_vertices = v_new * res_scale + aabb.min
+
+        #Print some vertices to see format
+        print("Sample vertices (world space):")
+        print(world_vertices[:5])  # Print first 5 vertices
+        #Print min and max
+        print("Vertex position range (world space):")
+        print("Min:", np.min(world_vertices, axis=0))
+        print("Max:", np.max(world_vertices, axis=0))
 
         print("Querying vertex colors and normals...")
         data = testbed.query_vertex_colors_and_normals(world_vertices.astype(np.float32))
@@ -100,57 +116,51 @@ def extract_mesh(snapshot_path, resolution=256, threshold=0.0, output_path="extr
         print(f"Saved {output_path}")
 
     elif mode == "flexicubes":
-        from flexicubes import FlexiCubes
-        print(f"Mode: FlexiCubes...")
-        
-        # Ensure density_grid is a torch tensor on CUDA for FlexiCubes
+        from kaolin.ops.conversions import FlexiCubes
         import torch
-        res_gpu = resolution + 1
-        density_np = testbed.get_density_grid(res_gpu, res_gpu, res_gpu, aabb)
-        density_grid_torch = torch.from_numpy(density_np).flatten().float().cuda()
+
+        device = torch.device("cuda")
+        fc = FlexiCubes(device=device)
+
+        density_np = testbed.get_density_grid(resolution, resolution, resolution, aabb)
+
+        # Match NeRF [Z, Y, X] to FlexiCubes [X, Y, Z]
+        density_np = np.transpose(density_np, (2, 1, 0)).copy()
         
-        fc = FlexiCubes()
-        x_nx3, cube_fx8 = fc.construct_voxel_grid(resolution)
-        cube_fx8 = cube_fx8.to(torch.int64).cuda()
-        # The call to fc returns torch tensors
-        v_torch, t_torch, L_dev = fc(x_nx3, density_grid_torch, cube_fx8, resolution)
+        sdf = torch.from_numpy(density_np).float().to(device).reshape(-1)
 
-        # CRITICAL: Convert tensors to NumPy arrays before your coordinate logic
-        vertices = v_torch.detach().cpu().numpy()
-        triangles = t_torch.detach().cpu().numpy()
+        # Flexicube resolution is number of voxels, which is one less than number of grid points
+        fc_res = resolution - 1 
+        x_nx3, cube_fx8 = fc.construct_voxel_grid(fc_res)
+        x_nx3 = x_nx3.to(device)
 
-        v_old = vertices.copy()
-        v_new = np.zeros_like(v_old)
+        # def flexicubes_grad_wrapper(x_nx3):
+        #     x_np = x_nx3.detach().cpu().numpy().astype(np.float32)
+        #     x_np = x_np + 0.5  # Shift from [-0.5, 0.5] to [0,1] range expected by testbed
+        #     grads_np = testbed.query_sdf_gradients(x_np)
+        #     return torch.from_numpy(grads_np).to(x_nx3.device)
 
-        v_new[:, 0] = v_old[:, 2]
-        v_new[:, 1] = v_old[:, 1]
-        v_new[:, 2] = v_old[:, 0]
+        verts, faces, _ = fc(x_nx3, sdf, cube_fx8, fc_res)
 
-        # Map from grid index space → world space
-        res_scale = (aabb.max - aabb.min) / resolution 
-        world_vertices = v_new * res_scale + aabb.min
+        # FlexiCubes outputs in [-0.5, 0.5] range, so we shift to [0,1] by adding 0,5
+        world_vertices = (verts + 0.5).detach().cpu().numpy().astype(np.float32)
 
-
-        print("Querying vertex colors and normals...")
-        # query_vertex_colors_and_normals now internally applies rotation + warp_position
-        data = testbed.query_vertex_colors_and_normals(world_vertices.astype(np.float32))
-
+        print(f"Querying {len(world_vertices):,} vertices for colors...")
+        data = testbed.query_vertex_colors_and_normals(world_vertices)
 
         colors  = data["colors"].astype(np.float64)
         normals = data["normals"].astype(np.float64)
-        refined_normals = np.zeros_like(normals)
-        refined_normals[:, 0] = -normals[:, 0]
-        refined_normals[:, 1] = -normals[:, 1]
-        refined_normals[:, 2] = -normals[:, 2] 
 
+        # 8. SAVE
         import open3d as o3d
         mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices      = o3d.utility.Vector3dVector(world_vertices)
-        mesh.triangles     = o3d.utility.Vector3iVector(triangles)
+        mesh.vertices       = o3d.utility.Vector3dVector(world_vertices)
+        mesh.triangles      = o3d.utility.Vector3iVector(faces.detach().cpu().numpy())
+        mesh.orient_triangles()
         mesh.vertex_colors  = o3d.utility.Vector3dVector(np.clip(colors, 0, 1))
-        mesh.vertex_normals = o3d.utility.Vector3dVector(refined_normals)
+        mesh.vertex_normals = o3d.utility.Vector3dVector(normals)
         o3d.io.write_triangle_mesh(output_path, mesh)
-        print(f"Saved {output_path}")
+
 
     elif mode == "chunkedCuda" :
         print(f"Mode: Chunked CUDA Marching Cubes...")
