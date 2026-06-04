@@ -1,2 +1,0 @@
-[console_scripts]
-eval-pipeline = src.cli:main
