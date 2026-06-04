@@ -1,0 +1,44 @@
+[project]
+name = "eval-pipeline"
+version = "0.1.0"
+description = "Evaluation pipeline for 3D reconstruction benchmark"
+requires-python = ">=3.10"
+dependencies = [
+    "trimesh[easy]>=4.0.0",     # Mesh I/O, ray tracing via embreex
+    "numpy>=1.24.0",            # Arrays, .npy storage
+    "scikit-learn>=1.3.0",      # KD-tree, NearestNeighbors
+    "pydantic>=2.0.0",          # Config validation
+    "pyyaml>=6.0",              # YAML parsing
+    "click>=8.0.0",             # CLI
+    "jinja2>=3.0.0",            # SLURM templates
+    "pandas>=2.0.0",            # Aggregation, tables
+    "tqdm>=4.65.0",             # Progress bars
+    "psutil>=5.9.0",            # Resource monitoring
+    "scikit-image>=0.21.0",     # binary_dilation for mask processing
+    "opencv-python>=4.8.0",     # Camera decomposition (fallback)
+    "matplotlib>=3.7.0",        # Visualization
+    "Pillow>=10.0.0",           # Image loading for masks
+]
+
+[project.optional-dependencies]
+visualization = [
+    "pyrender>=0.1.45",
+    "PyOpenGL>=3.1.0",
+]
+# normals evaluation requires pyalicevisionlib from /home/babrument/dev/pyalicevisionlib/src
+# (added to sys.path at runtime in src/core/normals.py)
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+eval-pipeline = "src.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

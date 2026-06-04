@@ -1,0 +1,45 @@
+# DiLiGenT-MV Evaluation Configuration
+# =====================================
+# Parameters matching the original diligentmv-eval codebase.
+
+dataset:
+  name: "my_dataset"                    # Dataset identifier
+  objects: [buddhaUMSPS,cowUMSPS,reading]                           # List of object names to process
+  methods: [chunkedCuda,cuda,cuda-extract,flexicubes,pymcubes] 
+  num_views: 20
+
+paths:
+  data_root: "/Users/antonin/N7/3A/Stage-M2/sdf-marching-cubes/external/RNb-NeuS2/data/comparison_results/{object}"
+
+cleanup:
+  dilation_radius: 5
+  z_threshold: 5.0
+  use_masks: true
+
+evaluation:
+  downsample_density: 0.05
+  max_dist: 2.0
+  fscore_thresholds: [0.5, 1.0, 1.5, 2.0, 5.0]
+
+visualization:
+  auto_generate: false
+  default_metrics:
+    - uniform
+    - accuracy
+    - completeness
+  default_views: [0]
+  scale: 1.0
+  crop: true
+  crop_margin: 15
+  colormaps:
+    accuracy: jet
+    completeness: jet
+    visibility: viridis
+    curvature: coolwarm
+  max_dist: 2.0
+  exclude_mode: none
+
+execution:
+  mode: "local"
+  local:
+    max_workers: 4

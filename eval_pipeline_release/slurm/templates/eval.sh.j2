@@ -1,0 +1,30 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --account={{ account }}
+#SBATCH --partition={{ partition }}
+#SBATCH --cpus-per-task={{ cpus }}
+#SBATCH --mem={{ mem_gb }}G
+#SBATCH --time={{ time }}
+#SBATCH --output=slurm_logs/%x_%j.out
+#SBATCH --error=slurm_logs/%x_%j.err
+
+# Evaluation job for {{ object }}/{{ method }}
+
+set -euo pipefail
+
+echo "Starting evaluation job: {{ object }}/{{ method }}"
+echo "Node: $(hostname)"
+echo "Date: $(date)"
+echo "Config: {{ config_path }}"
+
+# Load environment (adjust as needed for your cluster)
+# module load python/3.10
+# source /path/to/venv/bin/activate
+
+eval-pipeline evaluate \
+    --config "{{ config_path }}" \
+    --object "{{ object }}" \
+    --method "{{ method }}"
+
+echo "Evaluation completed: {{ object }}/{{ method }}"
+echo "End date: $(date)"

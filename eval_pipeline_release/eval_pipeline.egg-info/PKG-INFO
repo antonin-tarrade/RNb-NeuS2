@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: eval-pipeline
+Version: 0.1.0
+Summary: Evaluation pipeline for 3D reconstruction benchmark
+Requires-Python: >=3.10
+Requires-Dist: trimesh[easy]>=4.0.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scikit-learn>=1.3.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: click>=8.0.0
+Requires-Dist: jinja2>=3.0.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: tqdm>=4.65.0
+Requires-Dist: psutil>=5.9.0
+Requires-Dist: scikit-image>=0.21.0
+Requires-Dist: opencv-python>=4.8.0
+Requires-Dist: matplotlib>=3.7.0
+Requires-Dist: Pillow>=10.0.0
+Provides-Extra: visualization
+Requires-Dist: pyrender>=0.1.45; extra == "visualization"
+Requires-Dist: PyOpenGL>=3.1.0; extra == "visualization"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"

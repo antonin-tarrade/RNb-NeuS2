@@ -1,0 +1,71 @@
+# Example configuration for evaluating a single object
+# =====================================================
+#
+# Directory structure expected:
+#
+#   data_root/                      # Contains cameras + masks
+#     ├── sfm.json or cameras.npz   # Camera parameters
+#     ├── masks/                    # Object masks per view (optional)
+#     │   ├── 000.png
+#     │   └── ...
+#     └── images/                   # Input images (optional, for reference)
+#
+#   eval_root/                      # Evaluation directory
+#     ├── Groundtruth/
+#     │   ├── gt_mesh.ply           # Ground truth mesh
+#     │   ├── gt_pcd.npy            # (generated) sampled GT point cloud
+#     │   ├── attributes/
+#     │   │   ├── curvature_values.npy   # (generated)
+#     │   │   └── visibility_count.npy   # (generated)
+#     │   ├── challenges_raw/       # (optional) colored PLY for challenge masks
+#     │   │   └── 01_excluded.ply
+#     │   └── challenges/           # (generated) boolean masks
+#     │       └── excluded.npy
+#     └── my_method/
+#         └── results_raw/
+#             └── mesh.ply          # Reconstructed mesh to evaluate
+
+dataset:
+  name: "my_evaluation"
+  objects:
+    - "my_object"
+  methods:
+    - "my_method"
+  num_views: 84
+
+paths:
+  data_root: "/path/to/data_root"
+  eval_root: "/path/to/eval_root/{object}"
+
+cleanup:
+  dilation_radius: 30
+  use_masks: false          # Set true if you have 2D masks for cleanup
+
+evaluation:
+  downsample_density: 0.05  # Point spacing in mm
+  max_dist: 4.0             # Outlier threshold in mm
+  curvature_radius: 2.0     # Neighborhood radius for curvature estimation (mm)
+  fscore_thresholds: [0.5, 1.0, 1.5, 2.0, 5.0]
+
+visualization:
+  auto_generate: false
+  default_metrics:
+    - uniform
+    - accuracy
+    - completeness
+  default_views: [0, 20, 40, 60]
+  scale: 1.0
+  crop: true
+  crop_margin: 15
+  colormaps:
+    accuracy: jet
+    completeness: jet
+    visibility: viridis
+    curvature: coolwarm
+  max_dist: 4.0
+  exclude_mode: gray        # "none", "gray", or "remove"
+
+execution:
+  mode: "local"
+  local:
+    max_workers: 4
