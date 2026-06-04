@@ -874,6 +874,8 @@ PYBIND11_MODULE(pyngp, m) {
 		.def_readonly("from_mitsuba", &NerfDataset::from_mitsuba)
 		.def_readonly("from_na", &NerfDataset::from_na)
 		.def_readonly("is_hdr", &NerfDataset::is_hdr)
+		.def_readonly("n2w_s", &NerfDataset::n2w_s)
+    	.def_readonly("n2w_t", &NerfDataset::n2w_t) 
 		;
 
 	py::class_<Testbed::Nerf::Training>(nerf, "Training")

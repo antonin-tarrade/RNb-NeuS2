@@ -447,28 +447,6 @@ void Testbed::compute_and_save_marching_cubes_mesh(const char* filename, Vector3
 	}
 	printf("unwrap_it:%d\n",unwrap_it);
 
-	// printf("Saving density grid before flexicube");
-	// GPUMemory<float> density = get_density_on_grid(res3d, aabb);
-	// std::vector<float> cpu_density(density.size());
-	// density.copy_to_host(cpu_density);
-
-	// Save as .npy
-	// {
-	// 	std::string header_str = "{'descr': '<f4', 'fortran_order': False, 'shape': (" + std::to_string(res3d.x()) + ", " + std::to_string(res3d.y()) + ", " + std::to_string(res3d.z()) + "), }";
-	// 	// Pad header to be multiple of 16 bytes (NumPy v1.0 requirement)
-	// 	size_t current_len = header_str.size() + 1; // +1 for newline
-	// 	size_t padding = (16 - (current_len % 16)) % 16;
-	// 	header_str += std::string(padding, ' ') + "\n";
-		
-	// 	uint16_t header_len = (uint16_t)header_str.size();
-	// 	std::ofstream file("density_grid.npy", std::ios::binary);
-	// 	file.write("\x93NUMPY", 6);  // Magic string
-	// 	file.write("\x01\x00", 2);   // Version 1.0
-	// 	file.write((char*)&header_len, 2);  // Header length (little-endian)
-	// 	file.write(header_str.c_str(), header_str.size());  // Header
-	// 	file.write((char*)cpu_density.data(), cpu_density.size() * sizeof(float));  // Data
-	// }
-
 	marching_cubes(res3d, aabb, thresh);
 	if ((m_testbed_mode == ETestbedMode::Nerf)){
 		save_mesh(m_mesh.verts, m_mesh.vert_normals, m_mesh.vert_colors, m_mesh.indices, filename, unwrap_it,

@@ -446,7 +446,7 @@ __device__ uint32_t cascaded_grid_idx_at(Vector3f pos, uint32_t mip) {
 	Vector3i i = (pos * NERF_GRIDSIZE()).cast<int>();
 
 	if (i.x() < -1 || i.x() > NERF_GRIDSIZE() || i.y() < -1 || i.y() > NERF_GRIDSIZE() || i.z() < -1 || i.z() > NERF_GRIDSIZE()) {
-		printf("WTF %d %d %d\n", i.x(), i.y(), i.z());
+		printf("WTF %d %d %d NERF_GRISIZE : %d\n", i.x(), i.y(), i.z(),NERF_GRIDSIZE());
 	}
 
 	uint32_t idx = tcnn::morton3D(
