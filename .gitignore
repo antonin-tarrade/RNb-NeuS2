@@ -1,4 +1,8 @@
-/data/
+data/
+eval_pipeline_release/venv/
+eval_pipeline_release/**/__pycache__/
+eval_pipeline_release/**/*.pyc
+eval_pipeline_release/eval_pipeline.egg-info//data/
 /build/
 /build_save/
 /tinycudann.egg-info/
