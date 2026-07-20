@@ -14,11 +14,13 @@ dataset:
   name: "dlmv_resolutions"
   objects: [buddha,cow,reading,pot2]
   methods: [FlexiCubes,CudaMC, PyMCubes, DualContouring, FlexiCubes_chunked, PyMCubes_chunked,ChunkedCudaMC, DualContouring_chunked]
+  objects: [buddha]
+  methods: [ChunkedCudaMC, CudaMC, FlexiCubes_chunked, Flexicubes, PyMcubes, DualContouring, PyMcubes_chunked,DualContouring_chunked]
   resolutions: ["256", "512", "1024", "2048"]
   num_views: 20
 
 paths:
-  data_root: "/media/francois/BigStorage/Storage-Antonin/sdf-marching-cubes/external/RNb-NeuS2/data/comparison_results/{object}"
+  data_root: "/home/atarrade/dev/sdf-marching-cubes/external/RNb-NeuS2/data/comparison_results/{object}"
 
 cleanup:
   dilation_radius: 5
